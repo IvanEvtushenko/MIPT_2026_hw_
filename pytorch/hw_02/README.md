@@ -1,145 +1,118 @@
-# ДЗ 2: стартовый набор
+# ДЗ 2. Локальный ML-пайплайн Olist: PostgreSQL -> Airflow -> MLflow
 
-Задание находится в [ASSIGNMENT.md](ASSIGNMENT.md). Здесь описаны запуск и настройки сервисов.
+Условие в [ASSIGNMENT.md](ASSIGNMENT.md). Данные, модель (`src/olist_model.py`) и проверка (`src/check_model.py`) выданы и не менялись. Моя часть:
 
-В наборе есть данные, модель, PostgreSQL и Airflow. Ваша часть: функции в `src/olist_pipeline.py`, DAG обучения и сервис MLflow. Заготовки функций пока вызывают `NotImplementedError`.
+- `src/olist_pipeline.py`: этапы `extract`, `validate`, `prepare`, `train`;
+- `dags/olist_training.py`: DAG `olist_training`;
+- `compose.yaml`: сервис `mlflow` и зависимость Airflow от него.
 
-## Запустите окружение
+## Запуск от git clone
 
-Понадобятся Git, Docker с работающим Linux engine и Docker Compose v2. На Windows используйте Docker Desktop с WSL2 и терминал WSL; на macOS — Docker Desktop или совместимую VM. Python-зависимости работают внутри контейнера, обучение выполняется на CPU.
-
-Для планирования: 8 ГБ RAM на компьютере, около 15 ГБ диска и 4 ГБ RAM с 2 CPU для Docker. Расход ресурсов зависит от платформы и сборки; минимальные требования не измерялись. Набор использует учебный Airflow standalone.
-
-Распакуйте выданный `olist-homework.zip`, откройте каталог `olist-homework/` и создайте свой репозиторий:
+Нужны Git, Docker с Linux engine и Docker Compose v2; для Docker не меньше 4 ГБ RAM и 2 CPU. Обучение идёт на CPU внутри контейнера.
 
 ```bash
-cd olist-homework
+git clone https://github.com/IvanEvtushenko/MIPT_2026_hw_.git
+cd MIPT_2026_hw_/pytorch/hw_02
 cp .env.example .env
 docker compose up -d --build
+docker compose ps        # source, mlflow и airflow должны стать healthy
 ```
 
-Все следующие команды выполняйте из этого каталога. В README своего решения укажите запуск от клонирования, подставив реальный адрес репозитория:
+Первая сборка скачивает образы Airflow, PostgreSQL, MLflow и torch для CPU; на Apple M3 Pro сборка и подъём заняли около 7 минут. Все дальнейшие команды выполняются из каталога `pytorch/hw_02`.
+
+## Адреса интерфейсов
+
+| Сервис | С компьютера | Из контейнера Airflow |
+| --- | --- | --- |
+| Airflow, без пароля | http://127.0.0.1:8080 | |
+| MLflow | http://127.0.0.1:5050 | http://mlflow:5000 |
+
+Оба порта опубликованы только на `127.0.0.1`. Проверка MLflow из Airflow:
 
 ```bash
-git clone YOUR_REPOSITORY_URL olist-homework
-cd olist-homework
-cp .env.example .env
-docker compose up -d --build
+docker compose exec -T airflow python -c "import urllib.request; print(urllib.request.urlopen('http://mlflow:5000/health', timeout=5).read())"
 ```
 
-Откройте Airflow: `http://127.0.0.1:8080`. Включите DAG `example_one_task` и нажмите Trigger. Интерфейс работает без пароля; сохраняйте доступ только через `127.0.0.1`.
+## Запуск DAG
 
-Если порт занят, измените `AIRFLOW_PORT` в `.env` и пересоздайте сервис. Порты из `.env` относятся к компьютеру; внутри Docker используются порты сервисов.
-
-Проверьте состояние, логи и число заказов:
+В интерфейсе Airflow включите `olist_training` и нажмите Trigger. То же из терминала:
 
 ```bash
-docker compose ps
-docker compose logs --tail=100 airflow
-docker compose exec -T source psql -U olist -d olist -c 'SELECT count(*), count(DISTINCT order_id) FROM orders;'
+docker compose exec -T airflow airflow dags unpause olist_training
+docker compose exec -T airflow airflow dags trigger olist_training
 ```
 
-PostgreSQL загружает данные при создании нового volume. При обычном перезапуске данные сохраняются. Пароль из `.env.example` предназначен для локальной учебной БД.
+При включении DAG сам создаёт один плановый запуск за текущую неделю: расписание `@weekly`, `catchup=False`.
 
-## Запустите готовое обучение
+| Задача | Что делает | Что уходит в XCom |
+| --- | --- | --- |
+| `extract` | читает `public.orders` из PostgreSQL по `DATABASE_URL`, пишет UTF-8 CSV | абсолютный путь к снимку |
+| `validate` | только читает CSV: не пусто, все 13 столбцов, `order_id` уникален, числа конечные, `late` равен 0 или 1, даты разбираются | тот же путь |
+| `prepare` | считает SHA256 байтов снимка, делит по времени `split_by_time` с `OLIST_CUTOFF`, пишет train и validation | пути, SHA256, cutoff, число строк |
+| `train` | обучает выданную модель, пишет эксперимент и модель в MLflow | MLflow `run_id` |
 
-Ноутбук читает `data/olist_orders.csv.gz`. Выполните его код в контейнере:
+Настройки DAG: `max_active_runs=1`, лимит времени у каждой задачи, у `extract` 3 повтора с паузой 30 с, у `validate` `retries=0`, у `validate`, `prepare`, `train` `trigger_rule='all_success'`.
+
+Каждый запуск пишет файлы в свой каталог `/opt/olist/work/runs/<run_id>/`: `snapshot.csv`, `train.csv`, `validation.csv` и `model/`. Поэтому повторный запуск не дописывает строки к старому снимку.
+
+## Эксперимент в MLflow
+
+Эксперимент `olist_late_delivery`. В каждом run:
+
+- параметры `epochs`, `seed`, `lr`, `cutoff`, `train_rows`, `validation_rows`, `snapshot_sha256`;
+- метрики `train_loss` и `validation_pr_auc` по эпохам;
+- тег `dag_run_id`, равный `run_id` запуска Airflow, и тег `snapshot_path` с путём к снимку;
+- артефакт `model`: каталог `save_predictor` с `weights.pt` и `preprocessing.json`.
+
+По тегу `dag_run_id` находится исходный запуск Airflow, по `snapshot_path` и `snapshot_sha256` находится и проверяется снимок данных.
+
+## Проверка модели
 
 ```bash
-docker compose exec -T airflow python /opt/olist/src/run_notebook.py
+docker compose exec -T airflow python -m check_model --run-id 6f10e5a0502248818221f895fd149c6f
 ```
 
-Результат появится в `/opt/olist/work/notebook/`. Для интерактивной работы откройте `prototype.ipynb` в Jupyter с окружением из Dockerfile.
+Результат в моём окружении:
 
-Описание столбцов находится в `data/README.md`, версия набора — в `data/metadata.json`. Используйте идентификатор заказа только для проверки уникальности. Модель и преобразования оставьте выданными.
-
-## Добавьте MLflow
-
-Добавьте сервис `mlflow` в `compose.yaml`:
-
-- образ `ghcr.io/mlflow/mlflow:v3.16.1`;
-- команда `mlflow server --host 0.0.0.0 --port 5000 --workers 1 --backend-store-uri sqlite:////mlflow/mlflow.db --artifacts-destination /mlflow/artifacts --serve-artifacts --allowed-hosts mlflow:5000,localhost:*,127.0.0.1:*`;
-- переменная `MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false`;
-- именованный Docker volume на `/mlflow` для SQLite и артефактов;
-- лимит памяти 768 МБ;
-- публикация `127.0.0.1:${MLFLOW_PORT:-5050}:5000`.
-
-Для healthcheck используйте `python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).read()"`. Задайте интервал, timeout и число попыток с запасом на первый старт.
-
-У Airflow сохраните зависимость от `source` и добавьте зависимость от MLflow:
-
-```yaml
-depends_on:
-  # Здесь также остаётся существующая зависимость source.
-  mlflow:
-    condition: service_healthy
+```json
+{"run_id": "6f10e5a0502248818221f895fd149c6f", "rows": 5, "probabilities": [0.7106074094772339, 0.5012513399124146, 0.2709561884403229, 0.1435118466615677, 0.22757172584533691]}
 ```
 
-Добавляйте сервис и зависимость вместе. Airflow дождётся успешного healthcheck MLflow. После запуска проверьте `docker compose ps`. Из контейнера Airflow выполните ту же Python-команду с адресом `http://mlflow:5000/health`.
+В новом окружении `run_id` будет другим: его возвращает задача `train` в XCom, он же виден в MLflow у run с нужным тегом `dag_run_id`.
 
-Адреса MLflow:
+## Результат Clear
 
-| Откуда подключаться | Адрес |
-|---|---|
-| Браузер на компьютере | `http://127.0.0.1:5050` |
-| Код внутри Airflow | `http://mlflow:5000` |
+В запуске `manual__2026-11-08T12:19:18.262392+00:00` задача `train` временно падала с `RuntimeError`. После исправления кода я выполнил Clear только для `train`: она отработала со второй попытки, а `extract`, `validate` и `prepare` не перезапускались.
 
-В интерфейсе откройте Model training слева сверху. Внутри контейнера `localhost` указывает на этот контейнер. Для соседнего сервиса используйте его имя в Docker.
+| Задача | До Clear | После Clear |
+| --- | --- | --- |
+| `extract` | success, попытка 1 | success, попытка 1 |
+| `validate` | success, попытка 1 | success, попытка 1 |
+| `prepare` | success, попытка 1 | success, попытка 1 |
+| `train` | failed, попытка 1 | success, попытка 2 |
 
-Код Airflow получает адрес PostgreSQL из `DATABASE_URL`, адрес MLflow — из `MLFLOW_TRACKING_URI`. Доступ к PostgreSQL с компьютера выполняется через `docker compose exec source psql`.
+## Другие проверки
 
-## Сохраните и загрузите модель
+- Два ручных запуска прошли успешно и создали разные run в MLflow. В каталоге каждого запуска снимок на 21663 строки, SHA256 снимков совпадает: данные не удваиваются.
+- Испорченная копия снимка с повторным `order_id` остановила запуск на `validate`: `ValueError: order_id пустой или повторяется: дублей 1`, `prepare` и `train` получили `upstream_failed`. После проверки код `extract` восстановлен.
+- После `docker compose restart` и `docker compose up -d --force-recreate --no-deps mlflow` прогноз по тому же `run_id` совпал побайтно, параметры и метрики сохранились.
 
-`save_predictor` сохраняет веса и параметры преобразования признаков в одной директории. Загрузите всю директорию в артефакты MLflow run под именем `model`.
+Метрики выданной модели: на 5 эпохе `train_loss` 1.188, `validation_pr_auc` 0.049. Улучшать модель по условию не требуется.
 
-Для загрузки используйте `mlflow.artifacts.download_artifacts` с URI `runs:/RUN_ID/model`, затем `load_predictor`. Готовая проверка выполняет эти действия и выводит пять прогнозов в JSON:
+## Скриншоты
+
+Успешный запуск DAG с состояниями задач:
+
+![DAG olist_training](docs/airflow_dag.png)
+
+MLflow run с параметрами и метриками:
+
+![MLflow run](docs/mlflow_run.png)
+
+## Остановка
 
 ```bash
-docker compose exec -T airflow python -m check_model --run-id RUN_ID
+docker compose down        # удаляет контейнеры, volumes с БД, историей Airflow и моделями сохраняются
 ```
 
-Подставьте MLflow `run_id` и сохраните точную команду в своём README.
-
-Имена параметров и метрик перечислены в части 4 задания. Тег `dag_run_id` берите из контекста текущего запуска Airflow. Идентификатор MLflow run возвращает этап `train`.
-
-`extract` возвращает строку с абсолютным путём к обычному UTF-8 CSV (`.csv`). Вычисляйте `snapshot_sha256` по исходным байтам этого файла через `hashlib.sha256` до подготовки train/validation. Дальше путь и хеш можно передать небольшим словарём, например из `prepare`.
-
-## Где писать решение
-
-| Файл | Что добавить |
-|---|---|
-| `src/olist_pipeline.py` | Четыре этапа |
-| `dags/olist_training.py` | DAG обучения |
-| `compose.yaml` | MLflow и зависимость Airflow |
-| README | Команды запуска, проверки модели и результат Clear |
-
-Каталоги `src/` и `dags/` подключены в контейнер: правки Python применяются без пересборки образа. После изменения зависимостей пересоберите образ.
-
-Храните рабочие файлы в постоянном `/opt/olist/work`. Передавайте через XCom только пути, идентификаторы и хеши. Формат результата `prepare` выберите сами.
-
-`validate(snapshot)` только читает CSV, проверяет все 13 столбцов и данные, возвращает путь либо вызывает исключение. Запись файлов, создание каталогов, смена рабочего каталога, сеть, БД и запуск процессов запрещены. Выданные `data/`, `src/olist_model.py` и `src/check_model.py` оставьте без изменений.
-
-У `validate`, `prepare`, `train` сохраните `trigger_rule='all_success'`. Для `validate` задайте `retries=0`.
-
-Проверьте два случая:
-
-- Испорченная копия снимка останавливает DAG на `validate`. Временно верните путь к ней из `extract`, запустите DAG, затем восстановите код.
-- Исключение в `train` исправляется через Clear только этой задачи. Повторно запускается только `train`.
-
-По желанию добавьте настройку `epochs` и `seed` через Airflow Params или `dag_run.conf`. Условия бонуса указаны в задании.
-
-## Перезапуск и остановка
-
-```bash
-docker compose restart       # результаты и данные сохраняются
-docker compose up -d --force-recreate --no-deps mlflow  # новый контейнер, прежний именованный volume
-docker compose down          # останавливает и удаляет контейнеры, но не volumes
-```
-
-После добавления MLflow проверьте сохранность модели: пересоздайте его контейнер, дождитесь healthy и выполните прогноз по прежнему `run_id`.
-
-`docker compose down -v` удаляет локальную БД, историю Airflow и модели. Для проверки сохранности используйте команды выше.
-
-## Лицензия данных
-
-Условия находятся в `data/LICENSE.md`. Ограничение NonCommercial требует от организатора коммерческого курса отдельно проверить право использования данных.
+`docker compose down -v` удаляет и volumes: не используйте его, если нужно сохранить модели.
