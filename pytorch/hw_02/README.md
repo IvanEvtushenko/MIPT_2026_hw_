@@ -27,7 +27,7 @@ docker compose ps        # source, mlflow и airflow должны стать hea
 | Airflow, без пароля | http://127.0.0.1:8080 | |
 | MLflow | http://127.0.0.1:5050 | http://mlflow:5000 |
 
-Оба порта опубликованы только на `127.0.0.1`. Проверка MLflow из Airflow:
+Оба порта опубликованы только на `127.0.0.1`. В MLflow переключите режим слева вверху с GenAI на Model training, затем откройте эксперимент `olist_late_delivery`, вкладка Runs. Проверка MLflow из Airflow:
 
 ```bash
 docker compose exec -T airflow python -c "import urllib.request; print(urllib.request.urlopen('http://mlflow:5000/health', timeout=5).read())"
