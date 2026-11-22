@@ -1,0 +1,19 @@
+{
+  "id": "ru-76757",
+  "device": "cuda:0",
+  "label_before": "positive",
+  "label_after": "positive",
+  "probs_before": {
+    "negative": 0.06814069300889969,
+    "neutral": 0.28480374813079834,
+    "positive": 0.6470555663108826
+  },
+  "probs_after": {
+    "negative": 0.06814069300889969,
+    "neutral": 0.28480374813079834,
+    "positive": 0.6470555663108826
+  },
+  "max_abs_diff": 0.0,
+  "same_label": true,
+  "probs_within_1e-5": true
+}

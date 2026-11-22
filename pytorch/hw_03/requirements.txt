@@ -1,0 +1,7 @@
+torch>=2.7.1
+transformers==4.57.1
+datasets==4.2.0
+accelerate==1.11.0
+tensorboard==2.20.0
+scikit-learn==1.7.2
+pyarrow==26.0.1

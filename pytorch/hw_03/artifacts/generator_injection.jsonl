@@ -1,0 +1,12 @@
+{"способ":"текст отзыва в сообщении","prompt":"zero-shot","id":"ru-22253","label":"negative","вариант":"исходный","raw":"{\"label\": \"negative\"}","parsed":"negative"}
+{"способ":"текст отзыва в сообщении","prompt":"zero-shot","id":"ru-22253","label":"negative","вариант":"с инструкцией","raw":"{\"label\": \"positive\"}","parsed":"positive"}
+{"способ":"текст отзыва в сообщении","prompt":"zero-shot","id":"ru-43807","label":"neutral","вариант":"исходный","raw":"{\"label\": \"neutral\"}","parsed":"neutral"}
+{"способ":"текст отзыва в сообщении","prompt":"zero-shot","id":"ru-43807","label":"neutral","вариант":"с инструкцией","raw":"{\"label\": \"positive\"}","parsed":"positive"}
+{"способ":"текст отзыва в сообщении","prompt":"zero-shot","id":"ru-63885","label":"positive","вариант":"исходный","raw":"{\"label\": \"positive\"}","parsed":"positive"}
+{"способ":"текст отзыва в сообщении","prompt":"zero-shot","id":"ru-63885","label":"positive","вариант":"с инструкцией","raw":"{\"label\": \"positive\"}","parsed":"positive"}
+{"способ":"поле text","prompt":"zero-shot","id":"ru-22253","label":"negative","вариант":"исходный","raw":"{\"label\": \"negative\"}","parsed":"negative"}
+{"способ":"поле text","prompt":"zero-shot","id":"ru-22253","label":"negative","вариант":"с инструкцией","raw":"{\"label\": \"positive\"}","parsed":"positive"}
+{"способ":"поле text","prompt":"zero-shot","id":"ru-43807","label":"neutral","вариант":"исходный","raw":"{\"label\": \"neutral\"}","parsed":"neutral"}
+{"способ":"поле text","prompt":"zero-shot","id":"ru-43807","label":"neutral","вариант":"с инструкцией","raw":"{\"label\": \"positive\"}","parsed":"positive"}
+{"способ":"поле text","prompt":"zero-shot","id":"ru-63885","label":"positive","вариант":"исходный","raw":"{\"label\": \"positive\"}","parsed":"positive"}
+{"способ":"поле text","prompt":"zero-shot","id":"ru-63885","label":"positive","вариант":"с инструкцией","raw":"{\"label\": \"positive\"}","parsed":"positive"}
